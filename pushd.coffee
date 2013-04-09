@@ -4,7 +4,6 @@ zlib = require 'zlib'
 url = require 'url'
 Netmask = require('netmask').Netmask
 settings = require './settings'
-redis = require('redis').createClient(settings.server.redis_socket or settings.server.redis_port, settings.server.redis_host)
 Subscriber = require('./lib/subscriber').Subscriber
 EventPublisher = require('./lib/eventpublisher').EventPublisher
 Event = require('./lib/event').Event
@@ -12,8 +11,15 @@ PushServices = require('./lib/pushservices').PushServices
 Payload = require('./lib/payload').Payload
 logger = console
 
-if settings.server?.redis_auth?
-    redis.auth(settings.server.redis_auth)
+services = eval('(' + process.env.VCAP_SERVICES + ')')
+service = null
+for key, value of services
+  do (key, value) ->
+    value.forEach (s) ->
+      service = s.credentials if key.split('-')[0].toLowerCase() is "redis"
+
+redis = require('redis').createClient(service['port'], service['hostname'])
+redis.auth(service['password'])
 
 createSubscriber = (fields, cb) ->
     throw new Error("Invalid value for `proto'") unless service = pushServices.getService(fields.proto)
@@ -32,6 +38,7 @@ for name, conf of settings when conf.enabled
         eventSourceEnabled = yes
     else
         pushServices.addService(name, new conf.class(conf, logger, tokenResolver))
+
 eventPublisher = new EventPublisher(pushServices)
 
 app = express()
@@ -84,7 +91,7 @@ require('./lib/api').setupRestApi(app, createSubscriber, getEventFromId, authori
 if eventSourceEnabled
     require('./lib/eventsource').setup(app, authorize, eventPublisher)
 
-port = settings?.server?.tcp_port ? 80
+port = process.env.VCAP_APP_PORT
 app.listen port
 logger.log "Listening on port #{port}"
 
@@ -119,4 +126,4 @@ udpApi.on 'message', (msg, rinfo) ->
                     return
             logger.log("UDP/#{method} #{req.pathname} #{status}") if settings.server?.access_log
 
-udpApi.bind settings?.server?.udp_port ? 80
+udpApi.bind process.env.VCAP_APP_PORT
